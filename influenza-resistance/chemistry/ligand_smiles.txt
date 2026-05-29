@@ -1,0 +1,11 @@
+Baloxavir
+O=C1C2=C([O-])C(=O)C=CN2[NH+]([C@@H]2C3=CC=CC=C3SCC3=C2C=CC(F)=C3F)[C@@H]2COCC[NH+]12
+
+Oseltamivir
+CCOC(=O)C1=CC(C(CC1NC(=O)C)OC(CC)CC)N.OP(=O)(O)(O)O
+
+Zanamivir
+CC(=O)NC1C(C=C(OC1C(C(CO)O)O)C(=O)O)N=C(N)N
+
+Peramivir
+CCC(CC)C(C1C(C(CC1C(=O)O)NC(=O)C)N=C(N)N)O

@@ -13,18 +13,48 @@ from variables import mapping, aaList
 opsys = platform.system()
 
 
-def mkDir(res, output_dir, remove_existing_dir=True):
-    import shutil
-    # making new directory
-    new_dir = (output_dir + res)
-    if os.path.exists(new_dir):
-        # remove if directory exists, and make new directory
-        if remove_existing_dir:
-            shutil.rmtree(new_dir)
-            os.makedirs(new_dir)
-    else:
-        os.makedirs(new_dir)
-    return new_dir
+def drop_unnamed_columns(df):
+    """Remove CSV index columns accidentally persisted by pandas."""
+    return df.loc[:, [col for col in df.columns if not str(col).startswith('Unnamed') and str(col) != '']]
+
+
+def parse_csv_list(value):
+    """Normalize a CSV field into a list of stripped string values."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return []
+    if isinstance(value, str):
+        value = value.strip()
+        if value == '':
+            return []
+        return [item.strip() for item in value.split(',') if item.strip() != '']
+    return [str(value).strip()]
+
+
+def parse_csv_bool(value, default=False):
+    """Normalize CSV booleans stored as 0/1, true/false, or blank."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return default
+    if isinstance(value, str):
+        value = value.strip().lower()
+        if value == '':
+            return default
+        if value in ['1', 'true', 't', 'yes', 'y']:
+            return True
+        if value in ['0', 'false', 'f', 'no', 'n']:
+            return False
+    return bool(value)
+
+
+def get_struct_variant_name(struct_name, pdb_name=None, target_chain=None, keep_multiple_chains_in_struct=True):
+    """Return the saved scene basename for either combined or per-chain scenes."""
+    if keep_multiple_chains_in_struct or target_chain in [None, '']:
+        return struct_name
+    if pdb_name in [None, '']:
+        pdb_name = struct_name
+    pdb_core = str(pdb_name).split('_', 1)[0]
+    if pdb_core not in struct_name:
+        return f'{struct_name}-{target_chain}'
+    return struct_name.replace(pdb_core, f'{pdb_core}-{target_chain}', 1)
 
 
 def get_mapping(mapping, res):
@@ -89,128 +119,11 @@ def get_mutstr(mutation, sep='+'):
         mutation = mutation.split(sep)
     return mutstr, mutation
 
-
-def pdb_to_sce(pdb_fpath, ligand_name, chains_to_process=None, ligand_chain_id=None, keep_ligand=True, keep_metal_ion=True, split_lig_obj=True, save_sce=True, skip_chains=[]):
-    import string
-    import yasara
-    from variables import nonstandard_amino_acids, hetatm_non_metal_ion, hetatm_metal_ion
-
-    # load pdb
-    yasara.Clear()
-    yasara.LoadPDB(pdb_fpath)
-    print('Parsing', os.path.basename(pdb_fpath).split('.')[0], '...')
-
-    # get number of chains
-    chain_list = list(set(yasara.NameMol('Obj 1')))
-    chain_list.sort()
-    if ligand_chain_id is not None:
-        non_receptor_chains = [ligand_chain_id]
-    else:
-        non_receptor_chains = [chain for chain in chain_list if chain not in string.ascii_uppercase]
-    receptor_chains = [chain for chain in chain_list if chain not in non_receptor_chains]
-    print('Chain list (raw PDB):', len(chain_list), chain_list)
-    print('Receptor chains:', receptor_chains)
-    print('Non-receptor chains:', non_receptor_chains)
-
-    # if there are overall more than one chain, but only one is based on a protein receptor
-    # the 2nd chain must belong to the ligand -- merge this into the same chain as the protein
-    if len(chain_list) > 1 and len(non_receptor_chains) > 0 and len(receptor_chains)==1:
-        # rename all chains with the chain_id of the receptor chain
-        yasara.NameMol('all', receptor_chains[0])
-        # update chain list
-        chain_list = list(set(yasara.NameMol('Obj 1')))
-        chain_list.sort()
-        print('Chain list (after merging ligand with receptor chain):', len(chain_list), chain_list)
-
-    if chains_to_process is None:
-        chains_to_process = chain_list.copy()
-    else:
-        if isinstance(chains_to_process, str):
-            chains_to_process = list(chains_to_process)
-
-    # remove specific chains, if specified
-    chains_to_process = [c for c in chains_to_process if c not in skip_chains]
-    print('Final Chains to Process:', chains_to_process)
-
-    # retain only chains of interest
-    sce_fpath_list = []
-    for chain in chains_to_process:
-        print('Processing Chain', chain, '...')
-        # reload file
-        yasara.Clear()
-        yasara.LoadPDB(pdb_fpath)
-
-        # get non-protein residues
-        receptor_chains_to_delete = [c for c in chain_list if c not in chains_to_process+non_receptor_chains]
-        yasara.DelMol(f'not {chain}')
-
-        # if ligands are named on separate non-alphanumeric chains
-        # yasara.DelMol(f'not {chain} {" and not ".join(non_receptor_chains)}')
-        # del_cmd = f'{" and ".join(receptor_chains_to_delete)}'
-        # yasara.DelMol(del_cmd)
-        # print('del_cmd:', del_cmd)
-        chain_list_byreceptor = list(set(yasara.NameMol('Obj 1')))
-        print(chain_list_byreceptor)
-        resname_notprotein = [r for r in yasara.NameRes('not Protein') if r not in nonstandard_amino_acids]
-        print('Non-protein residues (before deletion):', resname_notprotein)
-
-        # get ligand name
-        if ligand_name is None:
-            ligand_name = [r for r in resname_notprotein if r not in  hetatm_non_metal_ion + hetatm_metal_ion][0]
-        print('Ligand ID:', ligand_name)
-
-        # retain only Protein, Ligand, and optionally metal ions.
-        # Copy the imported list so we do not mutate module-level constants
-        # across repeated calls to pdb_to_sce.
-        hetatm_res_to_keep = list(hetatm_non_metal_ion)
-        if keep_metal_ion:
-            hetatm_res_to_keep += hetatm_metal_ion
-        delres_cmd = "not " + " and not ".join(["Protein"] + hetatm_res_to_keep + nonstandard_amino_acids)
-        if keep_ligand:
-            delres_cmd += ' and not ' + ligand_name
-
-        # delete unnecessary components
-        # print('Deletion cmd:', delres_cmd)
-        yasara.DelRes(delres_cmd)
-        resname_notprotein = [r for r in yasara.NameRes('not Protein') if r not in nonstandard_amino_acids]
-        print('Non-Protein residues (after deletion)', len(resname_notprotein), resname_notprotein)
-
-        # split out ligand into 2nd object
-        if split_lig_obj:
-            print('# of obj (before splitting Obj 1):', yasara.CountObj('all'))
-            yasara.SplitObj(1)
-            print('# of obj (after splitting Obj 1):', yasara.CountObj('all'))
-            yasara.JoinObj(f'not Res {ligand_name}', 1)
-            print('# of obj (after joining non-ligand objects to Obj 1):', yasara.CountObj('all'))
-            obj_list = yasara.ListObj('all')
-            obj_list.sort()
-            yasara.SwapObj(obj_list[-1], 2)
-            obj_list = yasara.ListObj('all')
-            print(obj_list)
-
-        if save_sce:
-            if len(chain_list) == 1:
-                chain_suffix = ''
-            else:
-                chain_suffix = '-' + chain
-            sce_dir = os.path.dirname(pdb_fpath).replace('pdb/', 'sce/')
-            sce_fname = os.path.basename(pdb_fpath).replace('.pdb', chain_suffix + '.sce')
-            sce_fpath = sce_dir + '/' + sce_fname
-            if not os.path.exists(sce_dir):
-                os.makedirs(sce_dir)
-                print('Created postOpt sub-directory:', sce_dir)
-            yasara.SaveSce(sce_fpath)
-            print('Saved .sce file:', sce_fpath)
-            sce_fpath_list.append(sce_fpath)
-
-    return sce_fpath_list
-
-
 def findProcess(process_name):
-    if opsys=='Windows':
+    if opsys == 'Windows':
         return [int(item.split()[1]) for item in os.popen('tasklist').read().splitlines()[4:] if process_name in item.split()]
-    elif opsys=='Linux' or opsys=='Darwin':
-        return [int(pid) for pid in os.popen('pidof '+process_name).read().strip(' \n').split(' ') if pid!='']
+    elif opsys == 'Linux' or opsys == 'Darwin':
+        return [int(pid) for pid in os.popen('pidof ' + process_name).read().strip(' \n').split(' ') if pid != '']
     
 
 def exit_program(pid):
@@ -218,13 +131,7 @@ def exit_program(pid):
     print("Sending SIGINT to self...")
     os.kill(pid, signal.SIGINT)
     print('Exited program', pid)
-def is_float(string):
-    if string.replace(".", "").replace("-", "").isnumeric():
-        return True
-    else:
-        return False
-    
-    
+
 def save_dict_as_csv(datadict, cols, log_fpath, csv_suffix ='', multiprocessing_proc_num=None):
     # save results as CSV
     csv_txt = ''
@@ -273,7 +180,7 @@ def combine_csv_files(log_fpath_list, output_dir, output_fname, remove_combined_
     # fetch logged result
     for i, log_fpath in enumerate(log_fpath_list):
         if os.path.exists(log_fpath):
-            df = pd.read_csv(log_fpath, index_col=0)
+            df = pd.read_csv(log_fpath)
             if len(combined_data)==0:
                 df_all = df.copy()
             else:
@@ -285,16 +192,16 @@ def combine_csv_files(log_fpath_list, output_dir, output_fname, remove_combined_
             print(i, log_fpath, '>> MISSING')
 
     # update combined results
-    output_csv_fpath = output_dir + output_fname + '.csv'
+    output_csv_fpath = os.path.join(output_dir, output_fname + '.csv')
     if df_all is not None:
         if os.path.exists(output_csv_fpath) and append_to_existing_output:
-            df_existing = pd.read_csv(output_csv_fpath, index_col=0)
+            df_existing = pd.read_csv(output_csv_fpath)
             df_all = pd.concat([df_existing, df_all], axis=0)
-        df_all.to_csv(output_csv_fpath)
+        df_all.to_csv(output_csv_fpath, index=False)
 
     # record missing files
-    if len(missing_data)>0:
-        with open(output_dir + 'missing_data.txt', 'w') as f:
+    if missing_data:
+        with open(os.path.join(output_dir, 'missing_data.txt'), 'w') as f:
             missing_txt = '\n'.join(missing_data) + '\n'
             f.write(missing_txt)
 

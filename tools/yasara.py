@@ -20,15 +20,12 @@
 
 import platform
 opsys = platform.system()
-# replace this with YASARA directory path
-# yasaradir = '/Applications/YASARA.app/Contents/yasara/'
-yasaradir = '/home/cchiajt-bii/yasara2026/'
-
+version_suffix = '2026'
 
 if opsys=='Linux':
-    yasaradir = '/home/cchiajt-bii/yasara2026/'
+    yasaradir = f'/home/cchiajt-bii/yasara{version_suffix}/'
 elif opsys=='Windows':
-    yasaradir = "C:/Users/cchiajt-bii/Documents/projects/yasara2026/"
+    yasaradir = f"C:/Users/cchiajt-bii/Documents/projects/yasara{version_suffix}/"
 elif opsys=='Darwin':
     yasaradir = '/Applications/YASARA.app/Contents/yasara/'
 print('YASARA directory:', yasaradir)

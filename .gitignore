@@ -217,3 +217,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# YASARA post-optimization exports
+influenza-resistance/yasara/Output/**/postOpt/
+influenza-resistance/yasara/Output/**/postOpt/**
