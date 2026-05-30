@@ -5,16 +5,21 @@ from collections import OrderedDict
 from variables import address_dict
 
 
+YASARA_CONFIG = {
+    'version_suffix': '2025',
+}
+
+
 DATA_CONFIG = {
     'data_folder': address_dict['influenza-resistance'],
     'data_subfolder': '',
     'inputs': 'PA-NA_benchmark.csv',
-    'output_fname': 'PA-NA_benchmark',
+    'output_fname': f'PA-NA_benchmark_yasara{YASARA_CONFIG["version_suffix"]}.csv',
 }
 
 
 RUN_CONFIG = {
-    'run_multiprocessing': 16,
+    'run_multiprocessing': 8,
     'save_minimized_struct': True,
     'fix_metal_ion': True,
     'append_to_existing_output': True,

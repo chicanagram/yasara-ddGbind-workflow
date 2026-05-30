@@ -19,8 +19,10 @@
 # If you move YASARA somewhere else, please adapt the path below:
 
 import platform
+from configs import YASARA_CONFIG
+
 opsys = platform.system()
-version_suffix = '2026'
+version_suffix = YASARA_CONFIG.get('version_suffix', '2025')
 
 if opsys=='Linux':
     yasaradir = f'/home/cchiajt-bii/yasara{version_suffix}/'
