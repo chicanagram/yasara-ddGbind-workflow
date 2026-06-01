@@ -13,8 +13,8 @@ YASARA_CONFIG = {
 DATA_CONFIG = {
     'data_folder': address_dict['influenza-resistance'],
     'data_subfolder': '',
-    'inputs': 'PA-NA_benchmark.csv',
-    'output_fname': f'PA-NA_benchmark_yasara{YASARA_CONFIG["version_suffix"]}.csv',
+    'inputs': 'PA-NA_benchmark_missed.csv',
+    'output_fname': f'PA-NA_benchmark_yasara{YASARA_CONFIG["version_suffix"]}',
 }
 
 

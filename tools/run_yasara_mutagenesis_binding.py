@@ -27,6 +27,16 @@ ENERGY_FEATURE_PREFIXES = ['ebind', 'epot', 'esol', 'esolcol', 'esolvdw', 'esurf
 ENERGY_COMPONENT_SUFFIXES = ['Cpx', 'Rtr', 'Lgd']
 POSTOPT_SUBDIR = 'postOpt'
 FAILED_JOBS_PREFIX = 'failed_jobs'
+FAILED_JOB_COLUMNS = [
+    'struct_name',
+    'ligand_name',
+    'target_chain',
+    'mutation',
+    'proc_num',
+    'error_type',
+    'error_message',
+    'traceback',
+]
 
 
 class SceneValidationError(RuntimeError):
@@ -64,7 +74,7 @@ def parse_input_file(inputs, input_dir, sep):
             res_to_mutate = sorted(set(res_to_mutate))
         return list_all_mutations(wt_seq, ignore_mutations_to_WT=True, pos_to_mutate=res_to_mutate)
 
-    def parse_structure_metadata(struct_name, ligand_name, inputs_df_filt):
+    def parse_structure_metadata(struct_name, inputs_df_filt):
         chain_id, target_chain = [], []
         pdb_id = struct_name
         keep_multiple_chains_in_struct = True
@@ -112,7 +122,7 @@ def parse_input_file(inputs, input_dir, sep):
             if len(inputs_df_filt) == 0:
                 print((struct_name, ligand_name), '>> No entries after filtering.')
                 continue
-            struct_metadata = parse_structure_metadata(struct_name, ligand_name, inputs_df_filt)
+            struct_metadata = parse_structure_metadata(struct_name, inputs_df_filt)
 
             # Either take explicit mutations from the CSV or enumerate
             # all allowed substitutions from a supplied sequence.
@@ -148,17 +158,32 @@ def parse_args_process_mutant(args, mutbindDDG, sep):
     ligand_name = None
     target_chain = None
     proc_num = None
-    if len(args) == 12:
-        mutation, struct_name, ligand_name, target_chain, move, minimize_energy, resetSce, nrep, ff, mvdist, mvdrug, surfout = args
-    elif len(args) == 13:
-        mutation, struct_name, ligand_name, target_chain, move, minimize_energy, resetSce, nrep, ff, mvdist, mvdrug, surfout, proc_num = args
+    if len(args) == 13:
+        mutation, struct_name, ligand_name, target_chain, keep_multiple_chains_in_struct, move, minimize_energy, resetSce, nrep, ff, mvdist, mvdrug, surfout = args
+    elif len(args) == 14:
+        mutation, struct_name, ligand_name, target_chain, keep_multiple_chains_in_struct, move, minimize_energy, resetSce, nrep, ff, mvdist, mvdrug, surfout, proc_num = args
     else:
         raise ValueError(f'Unexpected process_mutant arg length: {len(args)}')
     try:
         mutstr, mutation = get_mutstr(mutation, sep=sep)
         mutation_for_log = mutstr
         print(proc_num, struct_name + " Mutation: " + mutstr + "; Target chain: " + str(target_chain) + "; Move: " + move + "; Minimize: " + str(minimize_energy))
-        log_fpath_avg, log_fpath_full = mutbindDDG.process_mutant(mutation, struct_name, ligand_name, target_chain, move, minimize_energy, resetSce, nrep, ff, mvdist, mvdrug, surfout, proc_num)
+        log_fpath_avg, log_fpath_full = mutbindDDG.process_mutant(
+            mutation,
+            struct_name,
+            ligand_name,
+            target_chain,
+            keep_multiple_chains_in_struct,
+            move,
+            minimize_energy,
+            resetSce,
+            nrep,
+            ff,
+            mvdist,
+            mvdrug,
+            surfout,
+            proc_num,
+        )
         return log_fpath_avg, log_fpath_full
     except Exception as exc:
         mutbindDDG.log_failed_job(
@@ -225,7 +250,11 @@ class MutBindDDG:
     def prepare_sce_files(self, all_inputs):
         scene_jobs = []
 
-        def append_scene_jobs(struct_name, pdb_id, ligand_name, target_chain, mutations, keep_multiple_chains_in_struct):
+        for (struct_name, ligand_name), struct_inputs_dict in all_inputs.items():
+            mutations = struct_inputs_dict['mutations']
+            pdb_id = struct_inputs_dict['pdb_id']
+            target_chain = struct_inputs_dict['target_chain']
+            keep_multiple_chains_in_struct = struct_inputs_dict['keep_multiple_chains_in_struct']
             for chain in target_chain:
                 scene_jobs.append({
                     'struct_name': get_struct_variant_name(
@@ -236,15 +265,9 @@ class MutBindDDG:
                     ),
                     'ligand_name': ligand_name,
                     'target_chain': chain,
+                    'keep_multiple_chains_in_struct': keep_multiple_chains_in_struct,
                     'mutations': mutations,
                 })
-
-        for (struct_name, ligand_name), struct_inputs_dict in all_inputs.items():
-            mutations = struct_inputs_dict['mutations']
-            pdb_id = struct_inputs_dict['pdb_id']
-            target_chain = struct_inputs_dict['target_chain']
-            keep_multiple_chains_in_struct = struct_inputs_dict['keep_multiple_chains_in_struct']
-            append_scene_jobs(struct_name, pdb_id, ligand_name, target_chain, mutations, keep_multiple_chains_in_struct)
         return scene_jobs
 
     def initialize_yasara(self, ff=None):
@@ -301,12 +324,15 @@ class MutBindDDG:
         yasara.CellAuto(extension='10')
         yasara.FixAll()
 
-    def validate_loaded_scene(self, struct_name, target_chain):
+    def validate_loaded_scene(self, struct_name, target_chain, keep_multiple_chains_in_struct):
         obj_list = yasara.ListObj('all')
         if 1 not in obj_list:
             raise SceneValidationError(f'{struct_name}: missing Obj 1 after loading scene')
         if 2 not in obj_list:
             raise SceneValidationError(f'{struct_name}: missing Obj 2 after loading scene')
+
+        if not keep_multiple_chains_in_struct:
+            return
 
         receptor_selector = f'Obj 1 and Mol {target_chain}'
         ligand_selector = f'Obj 2 and Mol {target_chain}'
@@ -323,17 +349,27 @@ class MutBindDDG:
         suffix = 'serial' if proc_num is None else str(proc_num)
         return os.path.join(self.output_dir, f'{FAILED_JOBS_PREFIX}_{suffix}.csv')
 
+    @staticmethod
+    def sanitize_failed_job_value(value):
+        return str(value).replace('\n', ' ').replace(',', ';')
+
     def log_failed_job(self, struct_name, ligand_name, target_chain, mutation, proc_num, exc, traceback_text):
         failed_jobs_fpath = self.get_failed_jobs_fpath(proc_num)
         file_exists = os.path.exists(failed_jobs_fpath)
         with open(failed_jobs_fpath, 'a') as f:
             if not file_exists:
-                f.write('struct_name,ligand_name,target_chain,mutation,proc_num,error_type,error_message,traceback\n')
-            error_message = str(exc).replace('\n', ' ').replace(',', ';')
-            traceback_text = traceback_text.replace('\n', ' | ').replace(',', ';')
-            f.write(
-                f'{struct_name},{ligand_name},{target_chain},{mutation},{proc_num},{type(exc).__name__},{error_message},{traceback_text}\n'
-            )
+                f.write(','.join(FAILED_JOB_COLUMNS) + '\n')
+            row = [
+                struct_name,
+                ligand_name,
+                target_chain,
+                mutation,
+                proc_num,
+                type(exc).__name__,
+                self.sanitize_failed_job_value(exc),
+                self.sanitize_failed_job_value(traceback_text.replace('\n', ' | ')),
+            ]
+            f.write(','.join([self.sanitize_failed_job_value(value) for value in row]) + '\n')
 
     def combine_failed_job_logs(self, remove_combined_files=False):
         failed_job_fpaths = sorted(
@@ -393,11 +429,11 @@ class MutBindDDG:
             x = '{0}{1}{2}'.format(WT, position, MT)
             mutname += x
             yasara.ShowRes(res_selector)
-            yasara.FreeAtom(move + ' and Mol ' + str(target_chain) + ' with distance <' + str(mvdist) + ' from ' + res_selector)
+            yasara.FreeAtom(f'{move} and Mol {target_chain} with distance <{mvdist} from {res_selector}')
         print('mutname:', mutname)
 
         if mvdrug == 1:  # allow ligand and close by residues to move
-            yasara.FreeAtom(move + ' and Mol ' + str(target_chain) + ' with distance <' + str(mvdist) + ' from Obj 2 and Mol ' + str(target_chain))
+            yasara.FreeAtom(f'{move} and Mol {target_chain} with distance <{mvdist} from Obj 2 and Mol {target_chain}')
         if mvdrug == 0:  # fix ligand
             yasara.FixObj("2")
         # fix metal ion
@@ -425,6 +461,27 @@ class MutBindDDG:
         yasara.ExperimentMinimization(convergence=0.01)
         yasara.Experiment('On')
         yasara.Wait('ExpEnd')
+
+    def get_component_energies(self, element, element_idx, method='BoundaryFast'):
+        # Legacy object-based energy calculation used for split-chain scenes.
+        if element in ['Rtr', 'Lgd']:
+            yasara.RemoveObj('not ' + str(element_idx))
+        yasara.ChargeObj('All', 0)
+        epot_list = yasara.Energy('All')
+        epot = sum(epot_list)
+        if method == 'PBS':
+            esolcol = yasara.SolvEnergy(method='PBS')[0]
+            _, esolvdw = yasara.SolvEnergy(method='BoundaryFast')
+        elif method == 'BoundaryFast':
+            esolcol, esolvdw = yasara.SolvEnergy(method='BoundaryFast')
+        yasara.Sim('On')
+        surfacc_list = yasara.Surf('Accessible')
+        surfacc = surfacc_list.pop()
+        esurfacc = surfacc * self.surfcost
+        esol = esolcol + esolvdw + esurfacc
+        yasara.AddObj('All')
+        yasara.Sim('Off')
+        return epot, esol, esolcol, esolvdw, esurfacc
 
     def get_selected_component_energies(self, target_chain, method='BoundaryFast'):
         # Evaluate receptor, target ligand, and their complex directly from
@@ -483,12 +540,42 @@ class MutBindDDG:
             results[feature_prefix] = results[feature_prefix + 'Cpx'] - results[feature_prefix + 'Rtr'] - results[feature_prefix + 'Lgd']
         return results
 
+    def calculate_component_energies(self, target_chain, keep_multiple_chains_in_struct, method='BoundaryFast'):
+        if keep_multiple_chains_in_struct:
+            print('Energy mode: selection-based')
+            return self.get_selected_component_energies(target_chain, method=method)
+
+        print('Energy mode: object-based')
+        object_map = {
+            'Cpx': None,
+            'Rtr': 1,
+            'Lgd': 2,
+        }
+        results = {}
+        for element in ENERGY_COMPONENT_SUFFIXES:
+            epot, esol, esolcol, esolvdw, esurfacc = self.get_component_energies(
+                element,
+                object_map[element],
+                method=method,
+            )
+            results['epot' + element] = epot
+            results['esol' + element] = esol
+            results['esolcol' + element] = esolcol
+            results['esolvdw' + element] = esolvdw
+            results['esurfacc' + element] = esurfacc
+            results['ebind' + element] = epot + esol
+
+        for feature_prefix in ENERGY_FEATURE_PREFIXES:
+            results[feature_prefix] = results[feature_prefix + 'Cpx'] - results[feature_prefix + 'Rtr'] - results[feature_prefix + 'Lgd']
+        return results
+
     def process_mutant(
             self,
             mutation,
             struct_name,
             ligand_name,
             target_chain,
+            keep_multiple_chains_in_struct,
             move='!backbone',
             minimize_energy=True,
             resetSce=False,
@@ -516,8 +603,22 @@ class MutBindDDG:
         # Collect replicate-level energies first, then summarize them
         # into AVG output once all repeats are complete.
         res = {f: [] for f in self.energy_features_list}
-        res_avg = {'struct':struct_name, 'target_chain': target_chain, 'mutations':mutant, 'ligname':ligand_name, 'setname':setname,
-                   'surfcost':self.surfcost, 'minimize_energy': minimize_energy, 'resetSce':resetSce, 'move':move, 'mvdist':mvdist, 'mvdrug':mvdrug, 'ff':ff, 'counterions':self.cntions, 'nrep':nrep}
+        res_avg = {
+            'struct': struct_name,
+            'target_chain': target_chain,
+            'mutations': mutant,
+            'ligname': ligand_name,
+            'setname': setname,
+            'surfcost': self.surfcost,
+            'minimize_energy': minimize_energy,
+            'resetSce': resetSce,
+            'move': move,
+            'mvdist': mvdist,
+            'mvdrug': mvdrug,
+            'ff': ff,
+            'counterions': self.cntions,
+            'nrep': nrep,
+        }
 
         # INITIALIZE YASARA #
         self.initialize_yasara(ff)
@@ -537,7 +638,7 @@ class MutBindDDG:
             if n == 0 or resetSce:
                 # load structure
                 self.load_structure(struct_name)
-                self.validate_loaded_scene(struct_name, target_chain)
+                self.validate_loaded_scene(struct_name, target_chain, keep_multiple_chains_in_struct)
                 # set up scene for minimization
                 _, continue_processing = self.set_up_sce_for_minimization(mutation, target_chain, move, mvdist, mvdrug, continue_processing)
             if not continue_processing:
@@ -552,7 +653,11 @@ class MutBindDDG:
                     if minimize_energy:
                         self.minimize()
                     # get component energies
-                    state_energies = self.get_selected_component_energies(target_chain, method=self.energy_calc_method)
+                    state_energies = self.calculate_component_energies(
+                        target_chain,
+                        keep_multiple_chains_in_struct,
+                        method=self.energy_calc_method,
+                    )
                     for element in ENERGY_COMPONENT_SUFFIXES:
                         res['ebind' + WT_or_MT + element].append(state_energies['ebind' + element])
                         res['epot' + WT_or_MT + element].append(state_energies['epot' + element])
@@ -611,7 +716,21 @@ class MutBindDDG:
         # get args
         # Prepare argument list
         args_list = [
-            (mutation, scene_job['struct_name'], scene_job['ligand_name'], scene_job['target_chain'], move, minimize_energy, resetSce, nrep, ff, mvdist, mvdrug, surfout)
+            (
+                mutation,
+                scene_job['struct_name'],
+                scene_job['ligand_name'],
+                scene_job['target_chain'],
+                scene_job['keep_multiple_chains_in_struct'],
+                move,
+                minimize_energy,
+                resetSce,
+                nrep,
+                ff,
+                mvdist,
+                mvdrug,
+                surfout,
+            )
             for scene_job in scene_jobs
             for mutation in scene_job['mutations']
             for nrep in params['nrep']
