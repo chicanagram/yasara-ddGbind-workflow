@@ -6,7 +6,7 @@ This repo stores structures, YASARA scene files, input tables, and output tables
 
 1. Set the active YASARA version in [tools/configs.py](/Users/charmainechia/Documents/projects/yasara-ddGbind-workflow/tools/configs.py):
    - `YASARA_CONFIG['version_suffix']`
-   <br>The suffix determines the YASARA folder name to access (e.g. `yasara2026`)
+   <br>This suffix determines the YASARA folder name to access (e.g. `yasara2026`), and can also be set to an empty string if applicable (i.e. `""`)
 2. Set the dataset in `DATA_CONFIG`:
    - `data_folder`
    - `data_subfolder`
