@@ -24,6 +24,8 @@ DEFAULT_CALC_VALUE_COLUMNS = ["ebindDDG"]
 DEFAULT_EXPERIMENTAL_VALUE_COLUMN = "fold_diff"
 DEFAULT_EXPERIMENTAL_LOG_VALUE_COLUMN = "fold_diff_log10"
 DEFAULT_CALC_ALIGN_COLUMNS = ["struct", "target_chain", "ligname", "mutations", "ff", "mvdist"]
+PAIRWISE_MATCH_COLUMNS = ["struct", "target_chain", "ligname", "mutations", "ff", "mvdist"]
+PAIRWISE_CONDITION_COLUMNS = ["ff", "mvdist"]
 DEFAULT_EXPERIMENTAL_ALIGN_COLUMNS = ["struct", "target_chain", "ligname", "mutations"]
 DEFAULT_SEGMENT_COLUMNS = ["result_source", "ff", "mvdist"]
 EXPERIMENTAL_METADATA_COLUMN_MAP = {
@@ -277,6 +279,16 @@ def build_segment_label(segment_values: tuple[object, ...], segment_columns: lis
     return ", ".join(f"{column}={value}" for column, value in zip(segment_columns, segment_values))
 
 
+def get_segment_records(
+    summary_df: pd.DataFrame,
+    segment_columns: list[str],
+    metric_columns: list[str] | None = None,
+) -> list[dict[str, object]]:
+    metric_columns = metric_columns or []
+    keep_columns = list(dict.fromkeys(segment_columns + metric_columns))
+    return summary_df[keep_columns].to_dict(orient="records")
+
+
 def get_plot_df(
     df: pd.DataFrame,
     x_column: str,
@@ -292,6 +304,31 @@ def get_plot_df(
     return plot_df.dropna(subset=[x_column, y_column])
 
 
+def style_scatter_axis(ax, x_label: str, y_label: str, title: str | None = None) -> None:
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    if title is not None:
+        ax.set_title(title)
+    ax.axhline(0.0, color="lightgray", linewidth=0.8)
+    ax.axvline(0.0, color="lightgray", linewidth=0.8)
+    ax.grid(alpha=0.25)
+
+
+def annotate_scatter_points(
+    ax,
+    plot_df: pd.DataFrame,
+    x_column: str,
+    y_column: str,
+    annotation_column: str,
+    fontsize: int,
+) -> None:
+    if annotation_column not in plot_df.columns:
+        return
+
+    for _, row in plot_df.iterrows():
+        ax.annotate(str(row[annotation_column]), (row[x_column], row[y_column]), fontsize=fontsize, alpha=0.8)
+
+
 def plot_scatter(
     df: pd.DataFrame,
     x_column: str,
@@ -305,16 +342,10 @@ def plot_scatter(
 
     fig, ax = plt.subplots(figsize=(6, 6))
     ax.scatter(plot_df[x_column], plot_df[y_column], alpha=0.8)
-    ax.set_xlabel(x_column)
-    ax.set_ylabel(y_column)
-    ax.set_title(title)
-    ax.axhline(0.0, color="lightgray", linewidth=0.8)
-    ax.axvline(0.0, color="lightgray", linewidth=0.8)
-    ax.grid(alpha=0.25)
+    style_scatter_axis(ax, x_column, y_column, title=title)
 
-    if annotate_points and annotation_column in plot_df.columns:
-        for _, row in plot_df.iterrows():
-            ax.annotate(str(row[annotation_column]), (row[x_column], row[y_column]), fontsize=7, alpha=0.8)
+    if annotate_points:
+        annotate_scatter_points(ax, plot_df, x_column, y_column, annotation_column, fontsize=7)
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=200)
@@ -368,6 +399,12 @@ def analyze_segments(
     return summary_df.sort_values(SUMMARY_SORT_COLUMNS, ascending=False).reset_index(drop=True)
 
 
+def create_subplot_grid(n_segments: int, subplots_per_row: int) -> tuple[plt.Figure, np.ndarray]:
+    n_cols = max(1, subplots_per_row)
+    n_rows = math.ceil(n_segments / n_cols)
+    return plt.subplots(n_rows, n_cols, figsize=(5.8 * n_cols, 5.4 * n_rows), squeeze=False)
+
+
 def plot_segment_grid(
     df: pd.DataFrame,
     summary_df: pd.DataFrame,
@@ -379,14 +416,12 @@ def plot_segment_grid(
     annotate_points: bool = False,
     annotation_column: str = "mutations",
 ) -> None:
-    segment_records = summary_df[segment_columns + ["n_points", "pearson", "spearman"]].to_dict(orient="records")
+    segment_records = get_segment_records(summary_df, segment_columns, ["n_points", "pearson", "spearman"])
     if not segment_records:
         return
 
     n_segments = len(segment_records)
-    n_cols = max(1, subplots_per_row)
-    n_rows = math.ceil(n_segments / n_cols)
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5.8 * n_cols, 5.4 * n_rows), squeeze=False)
+    fig, axes = create_subplot_grid(n_segments, subplots_per_row)
     axes_flat = axes.flatten()
 
     for ax, record in zip(axes_flat, segment_records):
@@ -399,19 +434,16 @@ def plot_segment_grid(
         segment_label = build_segment_label(tuple(record[column] for column in segment_columns), segment_columns)
 
         ax.scatter(plot_df[x_column], plot_df[y_column], alpha=0.8)
-        ax.set_title(
+        style_scatter_axis(
+            ax,
+            x_column,
+            y_column,
             f"{segment_label}\npearson={record['pearson']:.3f}, spearman={record['spearman']:.3f}, n={record['n_points']}",
-            fontsize=10,
         )
-        ax.set_xlabel(x_column)
-        ax.set_ylabel(y_column)
-        ax.axhline(0.0, color="lightgray", linewidth=0.8)
-        ax.axvline(0.0, color="lightgray", linewidth=0.8)
-        ax.grid(alpha=0.25)
+        ax.title.set_fontsize(10)
 
-        if annotate_points and annotation_column in plot_df.columns:
-            for _, row in plot_df.iterrows():
-                ax.annotate(str(row[annotation_column]), (row[x_column], row[y_column]), fontsize=6, alpha=0.8)
+        if annotate_points:
+            annotate_scatter_points(ax, plot_df, x_column, y_column, annotation_column, fontsize=6)
 
     for ax in axes_flat[n_segments:]:
         ax.axis("off")
@@ -433,7 +465,7 @@ def plot_segment_individual(
     annotate_points: bool = False,
     annotation_column: str = "mutations",
 ) -> None:
-    segment_records = summary_df[segment_columns + ["n_points", "pearson", "spearman"]].to_dict(orient="records")
+    segment_records = get_segment_records(summary_df, segment_columns, ["n_points", "pearson", "spearman"])
     for record in segment_records:
         segment_df = filter_segment_df(df, record, segment_columns)
         filename_stub = "__".join(
@@ -467,22 +499,118 @@ def plot_all_conditions_overlay(
 
     fig, ax = plt.subplots(figsize=(11, 7))
     cmap = plt.get_cmap("tab20")
-    segment_records = summary_df[segment_columns].drop_duplicates().to_dict(orient="records")
+    segment_records = get_segment_records(summary_df[segment_columns].drop_duplicates(), segment_columns)
 
     for idx, record in enumerate(segment_records):
         plot_df = get_plot_df(filter_segment_df(df, record, segment_columns), x_column, y_column)
         label = build_segment_label(tuple(record[column] for column in segment_columns), segment_columns)
         ax.scatter(plot_df[x_column], plot_df[y_column], alpha=0.7, color=cmap(idx % 20), label=label)
 
-    ax.set_xlabel(x_column)
-    ax.set_ylabel(y_column)
-    ax.axhline(0.0, color="lightgray", linewidth=0.8)
-    ax.axvline(0.0, color="lightgray", linewidth=0.8)
-    ax.grid(alpha=0.25)
+    style_scatter_axis(ax, x_column, y_column)
     ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.02, 1.0), borderaxespad=0.0)
     fig.subplots_adjust(right=0.68)
     fig.savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
+
+
+def build_pairwise_comparison_df(
+    calc_long_df: pd.DataFrame,
+    source_a: str,
+    source_b: str,
+    value_column: str,
+) -> pd.DataFrame:
+    left_df = calc_long_df.loc[
+        calc_long_df["result_source"] == source_a,
+        PAIRWISE_MATCH_COLUMNS + [value_column],
+    ].copy()
+    right_df = calc_long_df.loc[
+        calc_long_df["result_source"] == source_b,
+        PAIRWISE_MATCH_COLUMNS + [value_column],
+    ].copy()
+
+    return left_df.merge(
+        right_df,
+        on=PAIRWISE_MATCH_COLUMNS,
+        how="inner",
+        validate="one_to_one",
+        suffixes=("_a", "_b"),
+    )
+
+
+def plot_pairwise_comparison_grid(
+    pair_df: pd.DataFrame,
+    source_a: str,
+    source_b: str,
+    value_column: str,
+    output_path: Path,
+    subplots_per_row: int = 3,
+) -> None:
+    if pair_df.empty:
+        return
+
+    segment_records = (
+        pair_df[PAIRWISE_CONDITION_COLUMNS]
+        .drop_duplicates()
+        .sort_values(PAIRWISE_CONDITION_COLUMNS)
+        .to_dict(orient="records")
+    )
+    if not segment_records:
+        return
+
+    n_segments = len(segment_records)
+    fig, axes = create_subplot_grid(n_segments, subplots_per_row)
+    axes_flat = axes.flatten()
+    x_column = f"{value_column}_a"
+    y_column = f"{value_column}_b"
+
+    for ax, record in zip(axes_flat, segment_records):
+        segment_df = filter_segment_df(pair_df, record, PAIRWISE_CONDITION_COLUMNS)
+        plot_df = get_plot_df(segment_df, x_column, y_column)
+        metrics = compute_correlation_metrics(segment_df, x_column, y_column)
+        segment_label = build_segment_label(
+            tuple(record[column] for column in PAIRWISE_CONDITION_COLUMNS),
+            PAIRWISE_CONDITION_COLUMNS,
+        )
+
+        ax.scatter(plot_df[x_column], plot_df[y_column], alpha=0.8)
+        style_scatter_axis(
+            ax,
+            source_a,
+            source_b,
+            (
+                f"{segment_label}\n"
+                f"pearson={metrics['pearson']:.3f}, spearman={metrics['spearman']:.3f}, n={metrics['n_points']}"
+            ),
+        )
+        ax.title.set_fontsize(10)
+
+    for ax in axes_flat[n_segments:]:
+        ax.axis("off")
+
+    fig.subplots_adjust(hspace=0.6, wspace=0.35, top=0.95, bottom=0.08)
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
+def save_pairwise_comparison_plots(
+    calc_long_df: pd.DataFrame,
+    result_pairs: list[tuple[str, str]],
+    value_column: str,
+    output_dir: Path,
+    output_prefix: str,
+    subplots_per_row: int,
+) -> None:
+    for source_a, source_b in result_pairs:
+        pair_df = build_pairwise_comparison_df(calc_long_df, source_a, source_b, value_column)
+        pair_label = f"{source_a}_vs_{source_b}".replace(" ", "_")
+        plot_pairwise_comparison_grid(
+            pair_df=pair_df,
+            source_a=source_a,
+            source_b=source_b,
+            value_column=value_column,
+            output_path=output_dir / f"{output_prefix}pairwise_{pair_label}.png",
+            subplots_per_row=subplots_per_row,
+        )
 
 
 def average_over_chains(
@@ -584,6 +712,36 @@ def run_segment_analysis(
     )
 
 
+def build_analysis_outputs(
+    merged_df: pd.DataFrame,
+    calc_value_column: str,
+    experimental_log_value_column: str,
+    segment_columns: list[str],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    raw_summary_df = run_segment_analysis(
+        df=merged_df,
+        calc_value_column=calc_value_column,
+        experimental_value_column=experimental_log_value_column,
+        segment_columns=segment_columns,
+        plot_prefix="raw",
+    )
+
+    averaged_df = average_over_chains(
+        merged_df=merged_df,
+        calc_value_column=calc_value_column,
+        segment_columns=segment_columns,
+        experimental_metric_column=experimental_log_value_column,
+    )
+    averaged_summary_df = run_segment_analysis(
+        df=averaged_df,
+        calc_value_column=calc_value_column,
+        experimental_value_column=experimental_log_value_column,
+        segment_columns=segment_columns,
+        plot_prefix="chain_averaged",
+    )
+    return averaged_df, raw_summary_df, averaged_summary_df
+
+
 def run_analysis(
     data_folder: str,
     data_subfolder: str,
@@ -602,6 +760,7 @@ def run_analysis(
     save_intermediate_tables: bool = False,
     plot_mode: str = "grid",
     subplots_per_row: int = 3,
+    pairwise_result_pairs: list[tuple[str, str]] | None = None,
 ) -> dict[str, pd.DataFrame]:
     if plot_mode not in PLOT_MODES:
         raise ValueError(f"plot_mode must be one of {sorted(PLOT_MODES)}")
@@ -613,9 +772,11 @@ def run_analysis(
     output_dir.mkdir(parents=True, exist_ok=True)
     raw_plot_dir = output_dir / "raw_scatter"
     averaged_plot_dir = output_dir / "averaged_scatter"
+    pairwise_plot_dir = output_dir / "pairwise_scatter"
     if make_plots:
         raw_plot_dir.mkdir(parents=True, exist_ok=True)
         averaged_plot_dir.mkdir(parents=True, exist_ok=True)
+        pairwise_plot_dir.mkdir(parents=True, exist_ok=True)
 
     result_files = [results_dir / filename for filename in result_filenames]
     missing_result_files = [str(file_path) for file_path in result_files if not file_path.exists()]
@@ -649,26 +810,11 @@ def run_analysis(
         experimental_value_column=experimental_value_column,
     )
 
-    raw_summary_df = run_segment_analysis(
-        df=merged_df,
-        calc_value_column=analysis_value_column,
-        experimental_value_column=experimental_log_value_column,
-        segment_columns=segment_columns,
-        plot_prefix="raw",
-    )
-
-    averaged_df = average_over_chains(
+    averaged_df, raw_summary_df, averaged_summary_df = build_analysis_outputs(
         merged_df=merged_df,
         calc_value_column=analysis_value_column,
+        experimental_log_value_column=experimental_log_value_column,
         segment_columns=segment_columns,
-        experimental_metric_column=experimental_log_value_column,
-    )
-    averaged_summary_df = run_segment_analysis(
-        df=averaged_df,
-        calc_value_column=analysis_value_column,
-        experimental_value_column=experimental_log_value_column,
-        segment_columns=segment_columns,
-        plot_prefix="chain_averaged",
     )
 
     overall_summary_df = pd.concat([raw_summary_df, averaged_summary_df], axis=0, ignore_index=True, sort=False)
@@ -707,6 +853,15 @@ def run_analysis(
             subplots_per_row=subplots_per_row,
             annotate_points=annotate_points,
         )
+        if pairwise_result_pairs:
+            save_pairwise_comparison_plots(
+                calc_long_df=calc_long_df,
+                result_pairs=pairwise_result_pairs,
+                value_column=analysis_value_column,
+                output_dir=pairwise_plot_dir,
+                output_prefix=output_prefix,
+                subplots_per_row=subplots_per_row,
+            )
         save_analysis_plots(
             df=averaged_df,
             summary_df=averaged_summary_df,
@@ -756,8 +911,11 @@ if __name__ == "__main__":
     make_plots = True
     annotate_points = False
     save_intermediate_tables = False
-    plot_mode = "grid" # "individual" #
+    plot_mode = "individual" # "grid" #
     subplots_per_row = 3
+    pairwise_result_pairs = [
+        ("PA-NA_benchmark_yasara2025_linux", "PA-NA_benchmark_yasara2026_linux"),
+    ]
 
     outputs = run_analysis(
         data_folder=data_folder,
@@ -777,6 +935,7 @@ if __name__ == "__main__":
         save_intermediate_tables=save_intermediate_tables,
         plot_mode=plot_mode,
         subplots_per_row=subplots_per_row,
+        pairwise_result_pairs=pairwise_result_pairs,
     )
 
     print("Saved analysis outputs to:", Path(data_folder) / "yasara" / "Output" / data_subfolder / output_subdir)

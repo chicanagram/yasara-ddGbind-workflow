@@ -227,3 +227,5 @@ influenza-resistance/yasara/Output/**/raw_scatter/
 influenza-resistance/yasara/Output/**/raw_scatter/**
 influenza-resistance/yasara/Output/**/averaged_scatter/
 influenza-resistance/yasara/Output/**/averaged_scatter/**
+influenza-resistance/yasara/Output/**/pairwise_scatter/
+influenza-resistance/yasara/Output/**/pairwise_scatter/**
