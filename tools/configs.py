@@ -6,7 +6,7 @@ from variables import address_dict
 
 
 YASARA_CONFIG = {
-    'version_suffix': '2025',
+    'version_suffix': '2026',
 }
 
 
@@ -19,7 +19,7 @@ DATA_CONFIG = {
 
 
 RUN_CONFIG = {
-    'run_multiprocessing': 8,
+    'run_multiprocessing': 16,
     'save_minimized_struct': True,
     'fix_metal_ion': True,
     'append_to_existing_output': True,
