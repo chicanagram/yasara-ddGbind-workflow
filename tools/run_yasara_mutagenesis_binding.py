@@ -27,6 +27,8 @@ ENERGY_FEATURE_PREFIXES = ['ebind', 'epot', 'esol', 'esolcol', 'esolvdw', 'esurf
 ENERGY_COMPONENT_SUFFIXES = ['Cpx', 'Rtr', 'Lgd']
 POSTOPT_SUBDIR = 'postOpt'
 FAILED_JOBS_PREFIX = 'failed_jobs'
+ENERGY_MODE_CHAIN_AWARE = 'chain-aware'
+ENERGY_MODE_OBJECT_BASED = 'object-based'
 FAILED_JOB_COLUMNS = [
     'struct_name',
     'ligand_name',
@@ -167,7 +169,11 @@ def parse_args_process_mutant(args, mutbindDDG, sep):
     try:
         mutstr, mutation = get_mutstr(mutation, sep=sep)
         mutation_for_log = mutstr
-        print(proc_num, struct_name + " Mutation: " + mutstr + "; Target chain: " + str(target_chain) + "; Move: " + move + "; Minimize: " + str(minimize_energy))
+        print(
+            proc_num,
+            f'{struct_name} Mutation: {mutstr}; '
+            f'Target chain: {target_chain}; Move: {move}; Minimize: {minimize_energy}',
+        )
         log_fpath_avg, log_fpath_full = mutbindDDG.process_mutant(
             mutation,
             struct_name,
@@ -211,7 +217,8 @@ class MutBindDDG:
             sep='-',
             exit_program_after_processing=True,
             append_to_existing_output=True,
-            energy_calc_method='BoundaryFast'
+            energy_calc_method='BoundaryFast',
+            energy_selection_mode=ENERGY_MODE_CHAIN_AWARE,
     ):
         self.data_folder = data_folder
         self.data_subfolder = data_subfolder
@@ -225,6 +232,7 @@ class MutBindDDG:
         self.exit_program = exit_program_after_processing
         self.append_to_existing_output = append_to_existing_output
         self.energy_calc_method = energy_calc_method
+        self.energy_selection_mode = energy_selection_mode
 
         # results columns
         metadata_list = ['struct', 'target_chain', 'mutations', 'ligname', 'setname', 'minimize_energy', 'resetSce', 'move', 'mvdist', 'mvdrug', 'ff', 'surfcost', 'counterions', 'nrep']
@@ -463,7 +471,7 @@ class MutBindDDG:
         yasara.Wait('ExpEnd')
 
     def get_component_energies(self, element, element_idx, method='BoundaryFast'):
-        # Legacy object-based energy calculation used for split-chain scenes.
+        # Object-based energy calculation used for split-chain scenes.
         if element in ['Rtr', 'Lgd']:
             yasara.RemoveObj('not ' + str(element_idx))
         yasara.ChargeObj('All', 0)
@@ -482,6 +490,14 @@ class MutBindDDG:
         yasara.AddObj('All')
         yasara.Sim('Off')
         return epot, esol, esolcol, esolvdw, esurfacc
+
+    def resolve_energy_selection_mode(self, keep_multiple_chains_in_struct):
+        if (
+            self.energy_selection_mode == ENERGY_MODE_OBJECT_BASED
+            and not keep_multiple_chains_in_struct
+        ):
+            return ENERGY_MODE_OBJECT_BASED
+        return ENERGY_MODE_CHAIN_AWARE
 
     def get_selected_component_energies(self, target_chain, method='BoundaryFast'):
         # Evaluate receptor, target ligand, and their complex directly from
@@ -541,8 +557,15 @@ class MutBindDDG:
         return results
 
     def calculate_component_energies(self, target_chain, keep_multiple_chains_in_struct, method='BoundaryFast'):
-        if keep_multiple_chains_in_struct:
-            print('Energy mode: selection-based')
+        resolved_mode = self.resolve_energy_selection_mode(keep_multiple_chains_in_struct)
+        if resolved_mode == ENERGY_MODE_CHAIN_AWARE:
+            if self.energy_selection_mode == ENERGY_MODE_OBJECT_BASED and keep_multiple_chains_in_struct:
+                print(
+                    'Energy mode: chain-aware '
+                    '(object-based requested, but combined scenes require chain-aware mode)'
+                )
+            else:
+                print('Energy mode: chain-aware')
             return self.get_selected_component_energies(target_chain, method=method)
 
         print('Energy mode: object-based')
@@ -598,7 +621,10 @@ class MutBindDDG:
         log_fpath = self.get_log_fpath(struct_name, target_chain)
         setname = self.get_setname(ligand_name, struct_name, mutant, ff, resetSce, move, mvdist, mvdrug, self.surfout, self.cntions, nrep)
         seeds = []
-        print(multiprocessing_proc_num, 'Processing for ' + struct_name + ' >> ' + mutant + ' on chain ' + str(target_chain))
+        print(
+            multiprocessing_proc_num,
+            f'Processing for {struct_name} >> {mutant} on chain {target_chain}',
+        )
 
         # Collect replicate-level energies first, then summarize them
         # into AVG output once all repeats are complete.
@@ -691,16 +717,30 @@ class MutBindDDG:
             for f in self.energy_features_list:
                 res_avg[f] = round(np.mean(np.asarray(res[f])), 4)
                 res_avg[f + '_std'] = round(np.std(np.asarray(res[f])), 4)
-            print('ebindDDG=' + str(round(res_avg['ebindDDG'],2)))
+            print('ebindDDG=' + str(round(res_avg['ebindDDG'], 2)))
 
             # save average results as csv
             _, log_fpath_avg, write_mode = save_dict_as_csv(res_avg, self.res_avg_cols, log_fpath, multiprocessing_proc_num=multiprocessing_proc_num)
             print('Saved AVG results for ' + struct_name + '_' + str(target_chain) + '_' + mutant + ' to CSV (mode=' + write_mode + ').')
 
             # save all results as csv
-            res.update({'struct': [struct_name]*nrep, 'target_chain': [target_chain]*nrep, 'mutations': [mutant]*nrep, 'ligname': [ligand_name]*nrep, 'setname': [setname+'-'+str(n) for n in range(nrep)], 'n': [n for n in range(nrep)],
-                         'surfcost': [self.surfcost]*nrep, 'minimize_energy': [minimize_energy]*nrep, 'resetSce': [resetSce]*nrep, 'move': [move]*nrep,
-                         'mvdist': [mvdist]*nrep, 'mvdrug': [mvdrug]*nrep, 'ff': [ff]*nrep, 'counterions': [self.cntions]*nrep, 'nrep':[nrep]*nrep})
+            res.update({
+                'struct': [struct_name] * nrep,
+                'target_chain': [target_chain] * nrep,
+                'mutations': [mutant] * nrep,
+                'ligname': [ligand_name] * nrep,
+                'setname': [setname + '-' + str(n) for n in range(nrep)],
+                'n': [n for n in range(nrep)],
+                'surfcost': [self.surfcost] * nrep,
+                'minimize_energy': [minimize_energy] * nrep,
+                'resetSce': [resetSce] * nrep,
+                'move': [move] * nrep,
+                'mvdist': [mvdist] * nrep,
+                'mvdrug': [mvdrug] * nrep,
+                'ff': [ff] * nrep,
+                'counterions': [self.cntions] * nrep,
+                'nrep': [nrep] * nrep,
+            })
             _, log_fpath_full, write_mode = save_dict_as_csv(res, self.res_all_cols, log_fpath, csv_suffix='_FULL', multiprocessing_proc_num=multiprocessing_proc_num)
             print('Saved FULL results for ' + struct_name + '_' + str(target_chain) + '_' + mutant + ' to CSV (mode=' + write_mode + ').')
 
@@ -807,11 +847,13 @@ if __name__ == "__main__":
     append_to_existing_output = run_config['append_to_existing_output']
     sep = run_config['sep']
     energy_calc_method = run_config['energy_calc_method']
+    energy_selection_mode = run_config.get('energy_selection_mode', 'chain-aware')
     params = OrderedDict((key, list(value)) for key, value in RUN_PARAMS.items())
 
     # initialize MutBindDDG object
     mutbindDDG = MutBindDDG(data_folder, data_subfolder, fix_metal_ion=fix_metal_ion,
-                            append_to_existing_output=append_to_existing_output, sep=sep, energy_calc_method=energy_calc_method)
+                            append_to_existing_output=append_to_existing_output, sep=sep,
+                            energy_calc_method=energy_calc_method, energy_selection_mode=energy_selection_mode)
 
     # run pipeline
     mutbindDDG.run_pipeline(inputs, output_fname, params, run_multiprocessing, save_minimized_struct)

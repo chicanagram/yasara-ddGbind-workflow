@@ -221,3 +221,9 @@ __marimo__/
 # YASARA post-optimization exports
 influenza-resistance/yasara/Output/**/postOpt/
 influenza-resistance/yasara/Output/**/postOpt/**
+
+# Generated analysis plots
+influenza-resistance/yasara/Output/**/raw_scatter/
+influenza-resistance/yasara/Output/**/raw_scatter/**
+influenza-resistance/yasara/Output/**/averaged_scatter/
+influenza-resistance/yasara/Output/**/averaged_scatter/**

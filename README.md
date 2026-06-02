@@ -2,11 +2,38 @@
 
 This repo stores structures, YASARA scene files, input tables, and output tables for running mutagenesis-based binding energy (`ddG`) calculations with YASARA.
 
+## Quickstart
+
+1. Set the active YASARA version in [tools/configs.py](/Users/charmainechia/Documents/projects/yasara-ddGbind-workflow/tools/configs.py):
+   - `YASARA_CONFIG['version_suffix']`
+   <br>The suffix determines the YASARA folder name to access (e.g. `yasara2026`)
+2. Set the dataset in `DATA_CONFIG`:
+   - `data_folder`
+   - `data_subfolder`
+   - `inputs`
+   - `output_fname`
+3. Prepare `.sce` files from raw PDBs:
+
+```bash
+python3 tools/prepare_yasara_sce.py
+```
+
+4. Set runner options in `RUN_CONFIG` and `RUN_PARAMS`.
+5. Run the ddG workflow:
+
+```bash
+python3 tools/run_yasara_mutagenesis_binding.py
+```
+
+The workflow is two-stage:
+- `prepare_yasara_sce.py` converts raw PDB inputs into prepared `.sce` scenes
+- `run_yasara_mutagenesis_binding.py` loads those `.sce` files and performs WT/MT ddG calculations
+
 ## Repo Layout
 
 - `tools/prepare_yasara_sce.py`: PDB -> SCE preparation driver
 - `tools/run_yasara_mutagenesis_binding.py`: mutagenesis / ddG workflow driver
-- `tools/configs.py`: shared dataset and run configuration
+- `tools/configs.py`: shared YASARA, dataset, and run configuration
 - `tools/utils.py`: mutation parsing and CSV / path helpers
 - `tools/variables.py`: repo paths and residue / ligand constants
 - `influenza-resistance/pdb/`: raw input PDB structures
@@ -21,33 +48,17 @@ This repo stores structures, YASARA scene files, input tables, and output tables
 - Python packages used by the workflow:
   - `numpy`
   - `pandas`
-- `tools/yasara.py` must point to the correct local YASARA installation directory
-
-## Workflow Overview
-
-The workflow is now explicitly two-stage:
-
-1. `tools/prepare_yasara_sce.py`
-   - reads raw PDB files
-   - removes water
-   - runs `CleanAll()`
-   - keeps the requested receptor chains, ligand, and non-ligand cofactors
-   - writes prepared `.sce` files to the parallel `sce/` directory
-
-2. `tools/run_yasara_mutagenesis_binding.py`
-   - loads prepared `.sce` files only
-   - expands jobs over mutations, parameter combinations, and `target_chain`
-   - performs WT / MT swaps and minimization
-   - computes ddG outputs
-   - optionally exports minimized `.pdb` files from saved post-optimization `.sce` files
+- [tools/yasara.py](/Users/charmainechia/Documents/projects/yasara-ddGbind-workflow/tools/yasara.py) must point to a valid local YASARA installation layout
 
 ## Configuration
 
 Both scripts read shared settings from [tools/configs.py](/Users/charmainechia/Documents/projects/yasara-ddGbind-workflow/tools/configs.py).
 
-### `DATA_CONFIG`
+### `YASARA_CONFIG`
 
-Controls which dataset is read:
+- `version_suffix`: used by [tools/yasara.py](/Users/charmainechia/Documents/projects/yasara-ddGbind-workflow/tools/yasara.py) to build the local YASARA install path
+
+### `DATA_CONFIG`
 
 - `data_folder`: root data directory
 - `data_subfolder`: optional subfolder under `pdb/`, `sce/`, and `yasara/Output/`
@@ -55,8 +66,6 @@ Controls which dataset is read:
 - `output_fname`: basename for combined output CSVs
 
 ### `RUN_CONFIG`
-
-Controls run-time behavior for the ddG runner:
 
 - `run_multiprocessing`: `None` for serial mode, or an integer worker count
 - `save_minimized_struct`: whether to export post-optimization `.pdb` files
@@ -67,7 +76,7 @@ Controls run-time behavior for the ddG runner:
 
 ### `RUN_PARAMS`
 
-Defines the parameter sweep. Each entry is a list, and the runner expands all combinations:
+These lists define the parameter sweep:
 
 - `nrep`
 - `minimize_energy`
@@ -95,15 +104,11 @@ Common columns:
 - `ligand_id`: ligand residue name in the structure
 - `ligand_chain_id`: optional ligand chain ID override for prep
 
-### Important naming behavior
+### Naming behavior
 
-`struct_name` and `pdb_id` do different jobs:
+`pdb_id` selects the raw PDB to load, while `struct_name` controls the prepared scene / run basename.
 
-- `pdb_id` determines which raw PDB file is loaded
-  - example: `pdb_id = 6fs6_Baloxavir` loads `.../pdb/6fs6_Baloxavir.pdb`
-- `struct_name` determines the prepared scene / run basename
-
-When `keep_multiple_chains_in_struct=0`, per-chain scene naming is derived from `struct_name`, but the chain suffix is inserted after the PDB core token from `pdb_id`.
+When `keep_multiple_chains_in_struct=0`, the chain suffix is inserted after the PDB core token derived from `pdb_id`.
 
 Example:
 
@@ -115,58 +120,47 @@ Prepared scene name:
 
 - `PA_pH1N1_6fs6-A_Baloxavir.sce`
 
-not:
-
-- `PA_pH1N1_6fs6_Baloxavir-A.sce`
-
 ## Chain Handling
 
 ### `keep_multiple_chains_in_struct=1`
 
-One combined scene is prepared.
-
+- one combined scene is prepared
 - `chain_id` controls which receptor chains remain in the structure
-- all retained non-ligand molecules stay in `Obj 1`
-- all retained ligand molecules are grouped into `Obj 2`
-- the runner expands one job per `target_chain`, but reuses the same combined `.sce`
+- non-ligand molecules remain in `Obj 1`
+- retained ligand molecules are grouped into `Obj 2`
+- the runner expands one job per `target_chain`, reusing the same combined `.sce`
 
-Use this when you want to keep a multichain assembly intact, such as a homo-oligomer, while still computing one chain-specific run at a time.
+Use this when you want to keep a multichain assembly intact while still calculating one chain-specific run at a time.
 
 ### `keep_multiple_chains_in_struct=0`
 
-One chain-specific scene is prepared per requested `target_chain`.
+- one chain-specific scene is prepared per requested `target_chain`
+- `chain_id` defines the allowable receptor chains
+- `target_chain` defines which per-chain scenes and jobs are created
 
-- `chain_id` defines which receptor chains are allowed to be used
-- `target_chain` defines which chain-specific scenes are actually written and run
-- each saved scene name is derived from `struct_name` plus the chain suffix inserted after the PDB core token
+Use this when you want separate SCE files for separate chain calculations.
 
-Use this when you want separate SCE files for each chain calculation.
+If `target_chain` is omitted, the runner falls back to `chain_id`.
 
-### `target_chain`
+## Prep Step
 
-`target_chain` is always the chain that the runner mutates and evaluates in a single job.
-
-If the CSV omits `target_chain`, the runner falls back to `chain_id`.
-
-## How To Run
-
-### 1. Prepare `.sce` files from PDB input
-
-Set the dataset in [tools/configs.py](/Users/charmainechia/Documents/projects/yasara-ddGbind-workflow/tools/configs.py), then run:
+Run:
 
 ```bash
 python3 tools/prepare_yasara_sce.py
 ```
 
-This script:
+The prep script:
 
 - loads raw PDBs from `.../pdb/<data_subfolder>/` or `.../pdb/`
-- always runs `DelWater()` and `CleanAll()`
+- runs `DelWater()` and `CleanAll()`
+- keeps the requested receptor chains, ligand, and retained non-ligand molecules
 - writes prepared scenes to the parallel `.../sce/<data_subfolder>/` or `.../sce/`
+- prints a footer summary for any prepared scenes with unexpected object counts
 
-### 2. Run the ddG workflow from prepared `.sce` files
+## Runner Step
 
-Set `DATA_CONFIG`, `RUN_CONFIG`, and `RUN_PARAMS` in [tools/configs.py](/Users/charmainechia/Documents/projects/yasara-ddGbind-workflow/tools/configs.py), then run:
+Run:
 
 ```bash
 python3 tools/run_yasara_mutagenesis_binding.py
@@ -176,13 +170,13 @@ The runner:
 
 1. reads the input CSV
 2. groups jobs by `(struct_name, ligand_name)`
-3. expands each row across all requested `target_chain` values
-4. expands parameter combinations from `RUN_PARAMS`
+3. expands each row across requested `target_chain` values
+4. expands all parameter combinations from `RUN_PARAMS`
 5. loads the prepared `.sce`
-6. applies WT / MT residue swaps only on the current `target_chain`
+6. applies WT / MT swaps on the current `target_chain`
 7. minimizes the scene for each replicate
-8. computes chain-specific receptor / ligand / complex energies
-9. combines replicate outputs into AVG and FULL CSV files
+8. calculates receptor / ligand / complex energies
+9. combines replicate outputs into AVG and FULL CSVs
 10. optionally converts post-optimization `.sce` files to `.pdb`
 
 ## Outputs
@@ -196,7 +190,8 @@ Typical outputs:
 - `<output_fname>.csv`: combined averaged results
 - `<output_fname>_FULL.csv`: combined replicate-level results
 - `postOpt/`: saved post-minimization `.sce` files and optional exported `.pdb` files
-- `missing_data.txt`: missing intermediate files during the combine step
+- `failed_jobs.csv`: jobs that failed validation or runtime execution
+- `missing_data.txt`: missing intermediate files during combine
 
 Worker-level temporary CSVs use internal `DDG_<struct>_<target_chain>...` naming and are combined at the end of the run.
 
@@ -204,22 +199,20 @@ Worker-level temporary CSVs use internal `DDG_<struct>_<target_chain>...` naming
 
 The runner supports multiprocessing through `RUN_CONFIG['run_multiprocessing']`.
 
-Current behavior:
-
 - serial mode: set `run_multiprocessing = None`
 - parallel mode: set `run_multiprocessing` to an integer worker count
 
 Notes:
 
-- the helper `parse_args_process_mutant(...)` is retained specifically for multiprocessing
+- `parse_args_process_mutant(...)` is retained specifically for multiprocessing
 - temporary worker CSV naming includes `target_chain`, so parallel outputs do not collide
-- `.sce -> .pdb` export happens once after all workers finish, rather than inside each worker
-- if a worker raises an uncaught exception, the whole run will stop
-- YASARA multiprocessing also depends on your local YASARA installation and license behavior
+- `.sce -> .pdb` export happens once after all workers finish
+- failed jobs are logged and the rest of the batch continues
+- YASARA multiprocessing still depends on local YASARA installation and license behavior
 
 ## Notes
 
-- The runner assumes prepared `.sce` files exist before execution.
+- The runner assumes prepared `.sce` files already exist before execution.
 - The workflow assumes YASARA object numbering remains compatible with the prep layout:
   - `Obj 1`: receptor plus retained non-ligand molecules
   - `Obj 2`: ligand molecules
