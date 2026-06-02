@@ -39,7 +39,7 @@ EXPERIMENTAL_SUPPORT_COLUMNS = [
     "chain_id",
     "keep_multiple_chains_in_struct",
 ]
-SUMMARY_SORT_COLUMNS = ["abs_spearman", "abs_pearson"]
+SUMMARY_SORT_COLUMNS = ["r_squared", "abs_spearman", "abs_pearson"]
 CORE_OUTPUT_FILENAMES = {
     "calc_wide": "calculation_results_merged_wide.csv",
     "merged_chain_averaged": "calculation_vs_experiment_chain_averaged.csv",
@@ -262,16 +262,19 @@ def compute_correlation_metrics(
             "n_points": n_points,
             "pearson": math.nan,
             "spearman": math.nan,
+            "r_squared": math.nan,
         }
 
     x_values = work_df[x_column]
     y_values = work_df[y_column]
     pearson = x_values.corr(y_values, method="pearson")
     spearman = x_values.corr(y_values, method="spearman")
+    r_squared = pearson**2 if pd.notna(pearson) else math.nan
     return {
         "n_points": n_points,
         "pearson": pearson,
         "spearman": spearman,
+        "r_squared": r_squared,
     }
 
 
@@ -388,6 +391,7 @@ def analyze_segments(
                 "n_points",
                 "pearson",
                 "spearman",
+                "r_squared",
                 "abs_pearson",
                 "abs_spearman",
             ]
@@ -416,7 +420,7 @@ def plot_segment_grid(
     annotate_points: bool = False,
     annotation_column: str = "mutations",
 ) -> None:
-    segment_records = get_segment_records(summary_df, segment_columns, ["n_points", "pearson", "spearman"])
+    segment_records = get_segment_records(summary_df, segment_columns, ["n_points", "pearson", "spearman", "r_squared"])
     if not segment_records:
         return
 
@@ -438,7 +442,10 @@ def plot_segment_grid(
             ax,
             x_column,
             y_column,
-            f"{segment_label}\npearson={record['pearson']:.3f}, spearman={record['spearman']:.3f}, n={record['n_points']}",
+            (
+                f"{segment_label}\n"
+                f"pearson={record['pearson']:.3f}, spearman={record['spearman']:.3f}, n={record['n_points']}"
+            ),
         )
         ax.title.set_fontsize(10)
 
@@ -465,7 +472,7 @@ def plot_segment_individual(
     annotate_points: bool = False,
     annotation_column: str = "mutations",
 ) -> None:
-    segment_records = get_segment_records(summary_df, segment_columns, ["n_points", "pearson", "spearman"])
+    segment_records = get_segment_records(summary_df, segment_columns, ["n_points", "pearson", "spearman", "r_squared"])
     for record in segment_records:
         segment_df = filter_segment_df(df, record, segment_columns)
         filename_stub = "__".join(
@@ -820,7 +827,7 @@ def run_analysis(
     overall_summary_df = pd.concat([raw_summary_df, averaged_summary_df], axis=0, ignore_index=True, sort=False)
     overall_summary_df = overall_summary_df.sort_values(
         ["analysis_level", *SUMMARY_SORT_COLUMNS],
-        ascending=[True, False, False],
+        ascending=[True, False, False, False],
     ).reset_index(drop=True)
 
     outputs = {
@@ -909,7 +916,7 @@ if __name__ == "__main__":
     output_subdir = "analysis"
     output_prefix = "PA-NA_benchmark_"
     make_plots = True
-    annotate_points = False
+    annotate_points = True
     save_intermediate_tables = False
     plot_mode = "individual" # "grid" #
     subplots_per_row = 3
